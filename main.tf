@@ -50,6 +50,8 @@ module "ec2_kafka" {
   topic_name               = var.kafka_topic_name
   topic_partitions         = var.kafka_topic_partitions
   topic_replication_factor = var.kafka_topic_replication_factor
+  kafka_secret_arn         = module.secrets_manager.secret_arn
+  kafka_secret_version_id  = module.secrets_manager.secret_version_id
 }
 
 locals {

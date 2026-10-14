@@ -7,7 +7,7 @@ This repository takes an Apache Kafka broker on EC2 (KRaft mode) and adds securi
 | Area | What it provides |
 |---|---|
 | **Kafka infrastructure** | VPC across two AZs, EC2 broker with IMDSv2 and encrypted EBS, SSM Session Manager access (no SSH, no public Kafka port) |
-| **Secrets Manager** | A generated credential stored in Secrets Manager; the broker's IAM role may read only that secret |
+| **Secrets Manager + Kafka auth** | Terraform generates the Kafka credential into Secrets Manager; the broker reads it at boot and enforces SASL/SCRAM, so every client must authenticate with it |
 | **Detective control** | Custom AWS Config rule (Lambda) that reports S3 buckets without versioning |
 | **Reactive control** | Custom AWS Config rule (Lambda) that finds S3 buckets without full Public Access Block, with automatic remediation via SSM Automation |
 | **Conformance pack** | Both rules and the remediation deployed as one unit |
@@ -22,7 +22,7 @@ This repository takes an Apache Kafka broker on EC2 (KRaft mode) and adds securi
      ▼                     ▼                          ▼
  VPC + EC2 Kafka     Secrets Manager          Rule Lambdas + IAM roles
      │                     │                          │
-     └── IAM role may read ┘                          ▼
+     └─ SASL/SCRAM login ──┘                          ▼
                                             Conformance pack
                                        ┌──────────────┴──────────────┐
                                        ▼                             ▼
@@ -55,6 +55,30 @@ This repository takes an Apache Kafka broker on EC2 (KRaft mode) and adds securi
 
 The Lambda only decides; it never modifies the bucket. Remediation is done by SSM Automation, with retries and an audit trail.
 
+### Kafka authentication: Secrets Manager → SASL/SCRAM
+
+```text
+terraform apply ─► random_password ─► Secrets Manager {username, password}
+                                             │ (IAM: broker role may read this secret only)
+EC2 first boot ──────────────────────────────┘
+  1. read the secret with the instance role (user data holds only the ARN)
+  2. kafka-storage.sh format --add-scram  → credential stored as a salted hash in cluster metadata
+  3. port 9092 = SASL_PLAINTEXT, mechanism SCRAM-SHA-512 → no credential, no access
+Clients ─► kafka-client-config fetches the secret at run time → temporary config → connect
+```
+
+- **No secret in code, user data or logs.** User data carries only the secret's ARN; command tracing is turned off while the credential is handled, and the e2e tests check that the value appears in neither user data nor the provisioning logs.
+- **On disk only where Kafka needs it.** The broker's own login (for inter-broker authentication) lives in `server.properties`, readable only by the `kafka` user (`600`).
+- **New credential, new broker.** The secret's version is part of user data, so a changed password replaces the broker and it is formatted with the new credential.
+
+Connect from the broker (`ssm_connect_command`):
+
+```bash
+CFG=$(kafka-client-config)          # temporary client config with the credential
+/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config "$CFG" --list
+rm -f "$CFG"
+```
+
 ### Safety in a shared account: tagged buckets only
 
 Because the reactive control changes buckets automatically, both rules only act on buckets tagged:
@@ -83,8 +107,8 @@ aws-kafka-sec/
 │   ├── vpc/                        VPC, public/private subnets, routing
 │   ├── security_group/             broker SG (Kafka ports only from itself)
 │   ├── iam/                        broker role: SSM + read the secret
-│   ├── ec2_kafka/                  broker instance + Kafka install (user data)
-│   ├── secrets_manager/            generated credential
+│   ├── ec2_kafka/                  broker instance + Kafka install with SASL/SCRAM (user data)
+│   ├── secrets_manager/            generated Kafka credential
 │   └── config_controls/
 │       ├── main.tf                 Lambdas, IAM roles, log groups, conformance pack
 │       ├── templates/conformance_pack.yaml
@@ -93,7 +117,8 @@ aws-kafka-sec/
 │           └── reactive/handler.py
 ├── tests/
 │   ├── test_phase3_logic.py        unit tests for both rule Lambdas (mocked AWS)
-│   └── test_kafka_e2e.py           produce/consume test on the broker via SSM
+│   └── test_kafka_e2e.py           on the broker via SSM: authenticated produce/consume,
+│                                   auth rejection, credential-leak checks
 ├── scripts/
 │   ├── create_test_resources.sh    creates two tagged, non-compliant test buckets
 │   └── cleanup.sh                  deletes those test buckets
@@ -123,7 +148,7 @@ Key outputs:
 | Output | Use |
 |---|---|
 | `ssm_connect_command` | Open a shell on the broker |
-| `phase3_secret_arn` | The Secrets Manager secret |
+| `phase3_secret_arn` | The Secrets Manager secret holding the Kafka credential |
 | `phase3_conformance_pack_name` | The conformance pack |
 | `compliance_scope_tag_key` / `compliance_scope_tag_value` | Tag a bucket with these to bring it under the rules |
 
@@ -160,6 +185,17 @@ aws configservice describe-remediation-executions --config-rule-name <reactive r
 
 Expected: the versioning bucket is `NON_COMPLIANT` (reported only); the Public Access Block bucket goes `NON_COMPLIANT` → remediated → `COMPLIANT` within a few minutes.
 
+**Kafka end-to-end** (run by the apply workflow; locally after a deploy):
+
+```bash
+export KAFKA_INSTANCE_ID="$(terraform output -raw instance_id)"
+export KAFKA_TOPIC_NAME="$(terraform output -raw kafka_topic_name)"
+export KAFKA_SECRET_ARN="$(terraform output -raw phase3_secret_arn)"
+pytest tests/test_kafka_e2e.py -v
+```
+
+Covers: authenticated produce/consume; a client with no credential and one with a wrong password are both rejected; `server.properties` is `600 kafka`; the credential is in neither EC2 user data nor the provisioning logs.
+
 ## CI/CD
 
 GitHub Actions authenticate to AWS with OIDC; no access keys are stored. Configure in **Settings → Secrets and variables → Actions**:
@@ -184,6 +220,7 @@ terraform destroy
 
 ## Roadmap
 
-- Kafka authentication (SASL/SCRAM) using the Secrets Manager credential; today the secret is created and readable by the broker role but not yet used by Kafka
 - Three-broker Kafka cluster across three AZs
+- TLS (`SASL_SSL`): SCRAM already keeps the password off the wire, but message data is not yet encrypted in transit
+- Credential rotation (rotation Lambda that also updates the Kafka SCRAM credential)
 - Custom SSM remediation document in place of the AWS-managed runbook

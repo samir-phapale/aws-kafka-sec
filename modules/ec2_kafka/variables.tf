@@ -70,3 +70,13 @@ variable "topic_replication_factor" {
   type        = number
   default     = 1
 }
+
+variable "kafka_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the SASL/SCRAM credential ({username, password}). Only the ARN is placed in user data, never the value."
+  type        = string
+}
+
+variable "kafka_secret_version_id" {
+  description = "Version ID of the secret value. Part of user data so a new credential replaces the broker, which is then formatted with it."
+  type        = string
+}

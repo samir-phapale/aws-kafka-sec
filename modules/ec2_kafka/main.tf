@@ -47,6 +47,9 @@ resource "aws_instance" "kafka" {
     topic_name               = var.topic_name
     topic_partitions         = var.topic_partitions
     topic_replication_factor = var.topic_replication_factor
+    kafka_secret_arn         = var.kafka_secret_arn
+    secret_region            = element(split(":", var.kafka_secret_arn), 3)
+    secret_version_id        = var.kafka_secret_version_id
   })
 
   user_data_replace_on_change = true
