@@ -179,9 +179,19 @@ resource "aws_lambda_permission" "config" {
 }
 
 # ---------------------------------------------------------------------------
-# Reactive remediation role, assumed by SSM Automation when AWS Config runs
-# the remediation document against a NON_COMPLIANT bucket.
+# Reactive remediation: our own SSM Automation document, run by AWS Config
+# against a NON_COMPLIANT bucket under a dedicated role.
 # ---------------------------------------------------------------------------
+
+resource "aws_ssm_document" "s3_public_access_remediation" {
+  name            = "${local.name_prefix}-s3-public-access-remediation"
+  document_type   = "Automation"
+  document_format = "YAML"
+
+  content = templatefile("${path.module}/templates/remediation_document.yaml", {
+    script = file("${path.module}/remediation/s3_public_access_block.py")
+  })
+}
 
 data "aws_iam_policy_document" "automation_assume_role" {
   statement {
@@ -208,20 +218,14 @@ resource "aws_iam_role" "automation" {
 
 data "aws_iam_policy_document" "automation_s3" {
   statement {
-    sid    = "ConfigureBucketPublicAccessBlock"
+    sid    = "RemediateBucketPublicAccessBlock"
     effect = "Allow"
     actions = [
+      "s3:GetBucketTagging",
       "s3:GetBucketPublicAccessBlock",
       "s3:PutBucketPublicAccessBlock"
     ]
     resources = ["arn:${data.aws_partition.current.partition}:s3:::*"]
-  }
-
-  statement {
-    sid       = "ReadAccountPublicAccessBlock"
-    effect    = "Allow"
-    actions   = ["s3:GetAccountPublicAccessBlock"]
-    resources = ["*"]
   }
 }
 
@@ -244,6 +248,7 @@ resource "aws_config_conformance_pack" "s3_security" {
     detective_lambda_arn = aws_lambda_function.rule["detective"].arn
     reactive_lambda_arn  = aws_lambda_function.rule["reactive"].arn
     remediation_role_arn = aws_iam_role.automation.arn
+    remediation_document = aws_ssm_document.s3_public_access_remediation.name
     detective_frequency  = local.config_frequency
     scope_tag_key        = var.scope_tag_key
     scope_tag_value      = var.scope_tag_value
@@ -251,6 +256,7 @@ resource "aws_config_conformance_pack" "s3_security" {
 
   depends_on = [
     aws_lambda_permission.config,
-    aws_iam_role_policy.automation_s3
+    aws_iam_role_policy.automation_s3,
+    aws_ssm_document.s3_public_access_remediation
   ]
 }

@@ -83,7 +83,7 @@ def lambda_handler(event, context):
 
     Detects whether all four S3 Public Access Block settings are enabled on
     buckets carrying the scope tag. Remediation is not done here: AWS Config's
-    remediation configuration runs the SSM Automation runbook on
+    remediation configuration runs the custom SSM Automation document on
     NON_COMPLIANT results.
     """
     LOG.info("Received Config event: %s", json.dumps(event))

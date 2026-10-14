@@ -43,4 +43,4 @@ jobs:
       - name: Python unit tests
         run: |
           pip install -r tests/requirements.txt
-          pytest tests/test_phase3_logic.py -v
+          pytest tests/test_phase3_logic.py tests/test_remediation.py -v

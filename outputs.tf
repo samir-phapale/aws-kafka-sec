@@ -73,3 +73,8 @@ output "compliance_scope_tag_value" {
   description = "Tag value that opts an S3 bucket into the Phase 3 Config rules."
   value       = local.compliance_scope_tag_value
 }
+
+output "phase3_remediation_document_name" {
+  description = "Custom SSM Automation document run by AWS Config to remediate the reactive rule."
+  value       = module.config_controls.remediation_document_name
+}

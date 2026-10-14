@@ -9,7 +9,7 @@ This repository takes an Apache Kafka broker on EC2 (KRaft mode) and adds securi
 | **Kafka infrastructure** | VPC across two AZs, EC2 broker with IMDSv2 and encrypted EBS, SSM Session Manager access (no SSH, no public Kafka port) |
 | **Secrets Manager + Kafka auth** | Terraform generates the Kafka credential into Secrets Manager; the broker reads it at boot and enforces SASL/SCRAM, so every client must authenticate with it |
 | **Detective control** | Custom AWS Config rule (Lambda) that reports S3 buckets without versioning |
-| **Reactive control** | Custom AWS Config rule (Lambda) that finds S3 buckets without full Public Access Block, with automatic remediation via SSM Automation |
+| **Reactive control** | Custom AWS Config rule (Lambda) that finds S3 buckets without full Public Access Block, with automatic remediation by a custom SSM Automation document |
 | **Conformance pack** | Both rules and the remediation deployed as one unit |
 | **CI/CD** | GitHub Actions with AWS OIDC (no long-lived keys): plan on PR, apply + tests on `main` |
 
@@ -50,7 +50,10 @@ This repository takes an Apache Kafka broker on EC2 (KRaft mode) and adds securi
 1. A tagged bucket's configuration changes; the AWS Config recorder records it.
 2. Config invokes the reactive Lambda with the configuration item.
 3. If any of `BlockPublicAcls`, `IgnorePublicAcls`, `BlockPublicPolicy`, `RestrictPublicBuckets` is off → `NON_COMPLIANT`.
-4. Config automatically runs the SSM Automation runbook `AWSConfigRemediation-ConfigureS3BucketPublicAccessBlock` under a dedicated least-privilege role.
+4. Config automatically runs our SSM Automation document `<project>-<env>-s3-public-access-remediation` under a dedicated least-privilege role. Its three steps (Python in `modules/config_controls/remediation/`, unit-tested):
+   - **VerifyScopeTag:** refuses to touch a bucket without the scope tag
+   - **EnablePublicAccessBlock:** turns on all four settings, recording the prior state
+   - **VerifyPublicAccessBlock:** confirms all four settings are on, or fails the run
 5. The fix is itself a change, so the rule re-evaluates → `COMPLIANT`.
 
 The Lambda only decides; it never modifies the bucket. Remediation is done by SSM Automation, with retries and an audit trail.
@@ -112,11 +115,14 @@ aws-kafka-sec/
 │   └── config_controls/
 │       ├── main.tf                 Lambdas, IAM roles, log groups, conformance pack
 │       ├── templates/conformance_pack.yaml
+│       ├── templates/remediation_document.yaml   custom SSM Automation runbook
+│       ├── remediation/s3_public_access_block.py  its three remediation steps
 │       └── lambda/
 │           ├── detective/handler.py
 │           └── reactive/handler.py
 ├── tests/
 │   ├── test_phase3_logic.py        unit tests for both rule Lambdas (mocked AWS)
+│   ├── test_remediation.py         unit tests for the remediation steps (mocked AWS)
 │   └── test_kafka_e2e.py           on the broker via SSM: authenticated produce/consume,
 │                                   auth rejection, credential-leak checks
 ├── scripts/
@@ -158,7 +164,7 @@ Key outputs:
 
 ```bash
 pip install -r tests/requirements.txt
-pytest tests/test_phase3_logic.py -v
+pytest tests/test_phase3_logic.py tests/test_remediation.py -v
 ```
 
 **Controls in AWS:** create two deliberately non-compliant, tagged buckets:
@@ -180,7 +186,11 @@ aws configservice get-conformance-pack-compliance-details --conformance-pack-nam
 aws configservice start-config-rules-evaluation --config-rule-names <detective rule name>
 
 # Remediation history for the reactive rule
-aws configservice describe-remediation-executions --config-rule-name <reactive rule name>
+aws configservice describe-remediation-execution-status --config-rule-name <reactive rule name>
+
+# Step-by-step runs of the custom remediation document
+aws ssm describe-automation-executions \
+  --filters Key=DocumentNamePrefix,Values="$(terraform output -raw phase3_remediation_document_name)"
 ```
 
 Expected: the versioning bucket is `NON_COMPLIANT` (reported only); the Public Access Block bucket goes `NON_COMPLIANT` → remediated → `COMPLIANT` within a few minutes.
@@ -223,4 +233,3 @@ terraform destroy
 - Three-broker Kafka cluster across three AZs
 - TLS (`SASL_SSL`): SCRAM already keeps the password off the wire, but message data is not yet encrypted in transit
 - Credential rotation (rotation Lambda that also updates the Kafka SCRAM credential)
-- Custom SSM remediation document in place of the AWS-managed runbook
