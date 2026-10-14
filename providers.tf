@@ -30,4 +30,11 @@ provider "aws" {
       Phase       = "phase-3"
     }
   }
+
+  # Ownership tags stamped on new resources by the account's automatic
+  # tagging. They belong to that system, not to this configuration, so
+  # Terraform neither removes nor reports them as drift.
+  ignore_tags {
+    keys = ["CreatedBy", "CreatedDate", "PrincipalId"]
+  }
 }
