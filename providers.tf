@@ -31,10 +31,11 @@ provider "aws" {
     }
   }
 
-  # Ownership tags stamped on new resources by the account's automatic
-  # tagging. They belong to that system, not to this configuration, so
-  # Terraform neither removes nor reports them as drift.
+  # Tags owned by the account's governance tooling, not by this configuration,
+  # so Terraform neither removes nor reports them as drift:
+  # - CreatedBy / CreatedDate / PrincipalId: ownership tags stamped on creation
+  # - custodian_stopped: Cloud Custodian's marker on instances it stopped overnight
   ignore_tags {
-    keys = ["CreatedBy", "CreatedDate", "PrincipalId"]
+    keys = ["CreatedBy", "CreatedDate", "PrincipalId", "custodian_stopped"]
   }
 }

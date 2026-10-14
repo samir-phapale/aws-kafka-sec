@@ -44,7 +44,7 @@ Resources:
     Properties:
       ConfigRuleName: ${name_prefix}-s3-public-access-reactive
       TargetType: SSM_DOCUMENT
-      TargetId: AWSConfigRemediation-ConfigureS3BucketPublicAccessBlock
+      TargetId: ${remediation_document}
       Automatic: true
       MaximumAutomaticAttempts: 3
       RetryAttemptSeconds: 120
@@ -57,19 +57,11 @@ Resources:
         BucketName:
           ResourceValue:
             Value: RESOURCE_ID
-        BlockPublicAcls:
+        ScopeTagKey:
           StaticValue:
             Values:
-              - "true"
-        BlockPublicPolicy:
+              - "${scope_tag_key}"
+        ScopeTagValue:
           StaticValue:
             Values:
-              - "true"
-        IgnorePublicAcls:
-          StaticValue:
-            Values:
-              - "true"
-        RestrictPublicBuckets:
-          StaticValue:
-            Values:
-              - "true"
+              - "${scope_tag_value}"

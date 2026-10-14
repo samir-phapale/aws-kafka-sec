@@ -12,3 +12,8 @@ output "reactive_lambda_name" {
   description = "Name of the reactive custom rule Lambda."
   value       = aws_lambda_function.rule["reactive"].function_name
 }
+
+output "remediation_document_name" {
+  description = "Name of the custom SSM Automation document that remediates the reactive rule."
+  value       = aws_ssm_document.s3_public_access_remediation.name
+}
