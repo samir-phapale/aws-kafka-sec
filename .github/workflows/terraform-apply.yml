@@ -52,6 +52,7 @@ jobs:
         run: |
           echo "instance_id=$(terraform output -raw instance_id)" >> "$GITHUB_OUTPUT"
           echo "topic_name=$(terraform output -raw kafka_topic_name)" >> "$GITHUB_OUTPUT"
+          echo "secret_arn=$(terraform output -raw phase3_secret_arn)" >> "$GITHUB_OUTPUT"
 
       - name: Wait for instance to reach Running + SSM online
         run: |
@@ -109,5 +110,6 @@ jobs:
         env:
           KAFKA_INSTANCE_ID: ${{ steps.tf_outputs.outputs.instance_id }}
           KAFKA_TOPIC_NAME: ${{ steps.tf_outputs.outputs.topic_name }}
+          KAFKA_SECRET_ARN: ${{ steps.tf_outputs.outputs.secret_arn }}
         run: pytest tests/test_kafka_e2e.py -v -s
 
