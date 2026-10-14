@@ -54,6 +54,18 @@ jobs:
           echo "topic_name=$(terraform output -raw kafka_topic_name)" >> "$GITHUB_OUTPUT"
           echo "secret_arn=$(terraform output -raw phase3_secret_arn)" >> "$GITHUB_OUTPUT"
 
+      - name: Start broker if stopped (Cloud Custodian stops instances nightly)
+        run: |
+          STATE=$(aws ec2 describe-instances --instance-ids "${{ steps.tf_outputs.outputs.instance_id }}"             --query "Reservations[0].Instances[0].State.Name" --output text)
+          echo "Broker state: $STATE"
+          if [ "$STATE" = "stopping" ]; then
+            aws ec2 wait instance-stopped --instance-ids "${{ steps.tf_outputs.outputs.instance_id }}"
+            STATE=stopped
+          fi
+          if [ "$STATE" = "stopped" ]; then
+            aws ec2 start-instances --instance-ids "${{ steps.tf_outputs.outputs.instance_id }}"
+          fi
+
       - name: Wait for instance to reach Running + SSM online
         run: |
           aws ec2 wait instance-running --instance-ids "${{ steps.tf_outputs.outputs.instance_id }}"
