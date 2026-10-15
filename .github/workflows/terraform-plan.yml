@@ -48,4 +48,14 @@ jobs:
         run: terraform validate
 
       - name: Terraform plan
-        run: terraform plan -input=false -no-color
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Set up conftest
+        uses: ./.github/actions/setup-conftest
+
+      # plan.json contains the full planned values (including sensitive ones),
+      # so it is never printed or uploaded; it only exists on this runner.
+      - name: OPA policy check
+        run: |
+          terraform show -json tfplan > plan.json
+          conftest test plan.json --policy policy --all-namespaces --no-color

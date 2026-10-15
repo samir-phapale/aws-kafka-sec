@@ -11,7 +11,8 @@ This repository takes an Apache Kafka broker on EC2 (KRaft mode) and adds securi
 | **Detective control** | Custom AWS Config rule (Lambda) that reports S3 buckets without versioning |
 | **Reactive control** | Custom AWS Config rule (Lambda) that finds S3 buckets without full Public Access Block, with automatic remediation by a custom SSM Automation document |
 | **Conformance pack** | Both rules and the remediation deployed as one unit |
-| **CI/CD** | GitHub Actions with AWS OIDC (no long-lived keys): plan on PR, apply + tests on `main` |
+| **Policy as code (OPA)** | Rego policies checked with `conftest` against every Terraform plan; a violation fails the PR and blocks the deploy |
+| **CI/CD** | GitHub Actions with AWS OIDC (no long-lived keys): plan + policy check on PR, policy check + apply + tests on `main` |
 
 ## How it works
 
@@ -97,6 +98,37 @@ Phase3Scope = <project_name>-<environment>      (default: kafka-on-ec2-dev)
 
 This repository does **not** create an AWS Config recorder or delivery channel. AWS allows one recorder per account and region; in a Control Tower account it already exists (`aws-controltower-BaselineConfigRecorder`) and is owned by Control Tower. The rules use that recorder. In an account without AWS Config, enable the recorder first.
 
+## Policy as code (OPA)
+
+Every Terraform plan is converted to JSON and checked against the Rego policies in `policy/` with [conftest](https://www.conftest.dev/). The policies see everything that will exist after the change, including unchanged resources, so the whole stack is checked on every run.
+
+```text
+terraform plan -out=tfplan ─► terraform show -json ─► plan.json ─► conftest test (policy/*.rego)
+                                                                     │
+                                         any deny ─► job fails ─► PR blocked / apply never runs
+```
+
+| ID | Rule | Why |
+|---|---|---|
+| EC2-001 | EC2 must require IMDSv2 | Stops credential theft via the metadata service (SSRF) |
+| EC2-002 | Root/data volumes encrypted; root volume declared explicitly | Data at rest, independent of account defaults |
+| EC2-003 | Instance types only from `t3`, `t3a` | Cost guardrail |
+| NET-001 | No inbound from `0.0.0.0/0` or `::/0` | Kafka and SSH never public; access is via SSM |
+| TAG-001 | `Project`, `Environment`, `ManagedBy` on every taggable resource | Ownership and cost allocation |
+| SEC-001 | Secrets Manager values must not be literals in code | Checks how the value is written, never the value itself |
+| IAM-001 / IAM-002 | No `Action "*"` on `Resource "*"`; no `AdministratorAccess` attachments | Least privilege |
+| LOG-001 / LOG-002 | Log groups have retention; every Lambda's log group is managed in code | No orphaned, never-expiring logs |
+
+Where it runs:
+
+| Workflow | Check |
+|---|---|
+| `phase3-validation.yml` (PR) | `conftest verify`: policy unit tests (passing and violating inputs for every rule) |
+| `terraform-plan.yml` (PR) | `conftest test` on the PR's plan |
+| `terraform-apply.yml` (`main`) | `conftest test` on the plan that is then applied (`terraform apply tfplan`) |
+
+The policies only read the plan, so they are independent of the CI tool; moving to CodePipeline/CodeBuild would reuse them unchanged.
+
 ## Repository structure
 
 ```text
@@ -120,6 +152,10 @@ aws-kafka-sec/
 │       └── lambda/
 │           ├── detective/handler.py
 │           └── reactive/handler.py
+├── policy/                         OPA policies (Rego) + their unit tests (*_test.rego)
+│   ├── lib/                        plan helpers and test builders
+│   ├── ec2.rego  network.rego  tagging.rego  secrets.rego  iam.rego  logging.rego
+├── .github/actions/setup-conftest/ pinned, checksum-verified conftest install
 ├── tests/
 │   ├── test_phase3_logic.py        unit tests for both rule Lambdas (mocked AWS)
 │   ├── test_remediation.py         unit tests for the remediation steps (mocked AWS)
@@ -165,6 +201,17 @@ Key outputs:
 ```bash
 pip install -r tests/requirements.txt
 pytest tests/test_phase3_logic.py tests/test_remediation.py -v
+```
+
+**OPA policies** (install [conftest](https://www.conftest.dev/install/)):
+
+```bash
+conftest verify --policy policy                       # policy unit tests, no AWS needed
+
+terraform plan -out=tfplan                            # needs AWS credentials
+terraform show -json tfplan > plan.json
+conftest test plan.json --policy policy --all-namespaces
+rm -f plan.json                                       # contains planned values, incl. sensitive ones
 ```
 
 **Controls in AWS:** create two deliberately non-compliant, tagged buckets:

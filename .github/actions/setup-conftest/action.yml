@@ -1,0 +1,26 @@
+name: Set up conftest
+description: Install a pinned conftest release after verifying its SHA-256 checksum.
+
+inputs:
+  version:
+    description: conftest version to install (without the leading "v")
+    default: "0.71.1"
+
+runs:
+  using: composite
+  steps:
+    - name: Install conftest ${{ inputs.version }}
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        ARCHIVE="conftest_${VERSION}_Linux_x86_64.tar.gz"
+        BASE_URL="https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}"
+        cd "$RUNNER_TEMP"
+        curl -fsSLO "${BASE_URL}/${ARCHIVE}"
+        curl -fsSLO "${BASE_URL}/checksums.txt"
+        grep " ${ARCHIVE}\$" checksums.txt | sha256sum -c -
+        tar -xzf "${ARCHIVE}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
