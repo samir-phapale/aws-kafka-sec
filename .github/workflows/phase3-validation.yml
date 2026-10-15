@@ -44,3 +44,9 @@ jobs:
         run: |
           pip install -r tests/requirements.txt
           pytest tests/test_phase3_logic.py tests/test_remediation.py -v
+
+      - name: Set up conftest
+        uses: ./.github/actions/setup-conftest
+
+      - name: OPA policy unit tests
+        run: conftest verify --policy policy --no-color

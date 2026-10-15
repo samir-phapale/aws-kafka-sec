@@ -44,8 +44,21 @@ jobs:
             -backend-config="use_lockfile=true" \
             -backend-config="encrypt=true"
 
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Set up conftest
+        uses: ./.github/actions/setup-conftest
+
+      # Same gate as on the PR, so nothing that violates a policy reaches AWS
+      # even if a PR check was skipped. plan.json is never printed or uploaded.
+      - name: OPA policy check
+        run: |
+          terraform show -json tfplan > plan.json
+          conftest test plan.json --policy policy --all-namespaces --no-color
+
       - name: Terraform apply
-        run: terraform apply -input=false -auto-approve -no-color
+        run: terraform apply -input=false -no-color tfplan
 
       - name: Read Terraform outputs
         id: tf_outputs
